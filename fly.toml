@@ -1,19 +1,25 @@
-# fly.toml — Cấu hình Fly.io cho IELTS Vocab Bot
-# Docs: https://fly.io/docs/reference/configuration/
+# fly.toml app configuration file generated for learning-english on 2026-05-17T08:47:34Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "ielts-vocab-bot"
-primary_region = "sin"  # Singapore — gần Việt Nam nhất
+app = 'learning-english'
+primary_region = 'sin'
 
 [build]
-  dockerfile = "Dockerfile"
-
-# Bot là worker process (không cần HTTP port)
-# Không dùng [http_service] vì bot chạy polling, không cần web server
+  dockerfile = 'Dockerfile'
 
 [processes]
-  app = "python bot.py"
+  app = 'python bot.py'
 
-# Dùng máy nhỏ nhất (tiết kiệm, đủ cho bot)
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '256mb'
