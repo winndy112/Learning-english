@@ -2,16 +2,69 @@ import os
 import pickle
 import base64
 import json
+import logging
+import urllib.request
 import gspread
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
+
+def _update_fly_secret(creds: Credentials) -> None:
+    """
+    Cập nhật GOOGLE_TOKEN_PICKLE_B64 trên Fly.io khi refresh token thay đổi.
+    Yêu cầu 2 env var: FLY_API_TOKEN và FLY_APP_NAME.
+    """
+    fly_token = os.environ.get("FLY_API_TOKEN")
+    fly_app = os.environ.get("FLY_APP_NAME")
+    if not fly_token or not fly_app:
+        logger.warning("Refresh token đã thay đổi nhưng thiếu FLY_API_TOKEN hoặc FLY_APP_NAME — không thể tự cập nhật secret.")
+        return
+
+    new_b64 = base64.b64encode(pickle.dumps(creds)).decode()
+
+    # Cập nhật in-memory để process hiện tại dùng luôn
+    os.environ["GOOGLE_TOKEN_PICKLE_B64"] = new_b64
+
+    query = """
+    mutation($input: SetSecretsInput!) {
+      setSecrets(input: $input) {
+        release { id }
+      }
+    }
+    """
+    payload = json.dumps({
+        "query": query,
+        "variables": {
+            "input": {
+                "appId": fly_app,
+                "secrets": [{"key": "GOOGLE_TOKEN_PICKLE_B64", "value": new_b64}]
+            }
+        }
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.fly.io/graphql",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {fly_token}"
+        }
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        logger.info("Đã cập nhật GOOGLE_TOKEN_PICKLE_B64 lên Fly.io thành công.")
+    except Exception as e:
+        logger.error("Không thể cập nhật Fly.io secret: %s", e)
+
 
 def get_credentials():
     """
@@ -35,11 +88,28 @@ def get_credentials():
     # ── Refresh nếu hết hạn ──────────────────────────────────────────────
     if creds and not creds.valid:
         if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Lưu lại token đã refresh (chỉ khi dùng file local)
-            if not token_b64 and os.path.exists("token.pickle"):
-                with open("token.pickle", "wb") as f:
-                    pickle.dump(creds, f)
+            old_refresh_token = creds.refresh_token
+            try:
+                creds.refresh(Request())
+            except RefreshError as e:
+                raise RuntimeError(
+                    f"Google refresh token hết hạn hoặc bị thu hồi: {e}\n"
+                    "Cần lấy token mới:\n"
+                    "  1. Chạy local: python generate_token.py\n"
+                    "  2. Lấy base64: python -c \"import pickle,base64; print(base64.b64encode(open('token.pickle','rb').read()).decode())\"\n"
+                    "  3. Cập nhật Fly.io: fly secrets set GOOGLE_TOKEN_PICKLE_B64=<giá trị trên>"
+                ) from e
+
+            if token_b64:
+                # Nếu refresh token thay đổi (Google rotate), cập nhật Fly.io secret
+                if creds.refresh_token != old_refresh_token:
+                    logger.info("Refresh token đã được Google rotate, đang cập nhật Fly.io secret...")
+                    _update_fly_secret(creds)
+            else:
+                # Local: lưu lại file
+                if os.path.exists("token.pickle"):
+                    with open("token.pickle", "wb") as f:
+                        pickle.dump(creds, f)
 
     # ── 3. Chạy OAuth flow lần đầu (chỉ dùng local) ─────────────────────
     if not creds or not creds.valid:
