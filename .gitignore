@@ -1,3 +1,22 @@
-.credentials.json   
-.token.pickle
-.config.py
+# ─── Secrets & credentials (NEVER commit these) ──────────
+credentials.json
+token.pickle
+.env
+
+# ─── Python ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+
+# ─── IDE ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── OS ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
